@@ -492,6 +492,7 @@ namespace Avalonia.Controls
         private void OnSourceListChanged(object dataSource, NotifyCollectionChangedEventArgs args)
         {
             bool selectionInvalidated = false;
+            IReadOnlyList<object> removed = null;
 
             switch (args.Action)
             {
@@ -503,7 +504,7 @@ namespace Avalonia.Controls
 
                 case NotifyCollectionChangedAction.Remove:
                 {
-                    selectionInvalidated = OnItemsRemoved(args.OldStartingIndex, args.OldItems.Count);
+                    (selectionInvalidated, removed) = OnItemsRemoved(args.OldStartingIndex, args.OldItems);
                     break;
                 }
 
@@ -516,7 +517,7 @@ namespace Avalonia.Controls
 
                 case NotifyCollectionChangedAction.Replace:
                 {
-                    selectionInvalidated = OnItemsRemoved(args.OldStartingIndex, args.OldItems.Count);
+                    (selectionInvalidated, removed) = OnItemsRemoved(args.OldStartingIndex, args.OldItems);
                     selectionInvalidated |= OnItemsAdded(args.NewStartingIndex, args.NewItems.Count);
                     break;
                 }
@@ -525,7 +526,9 @@ namespace Avalonia.Controls
             if (selectionInvalidated)
             {
                 OnSelectionChanged();
-                _manager.OnSelectionInvalidatedDueToCollectionChange();
+                _manager.OnSelectionInvalidatedDueToCollectionChange(
+                    selectionInvalidated,
+                    removed ?? Array.Empty<object>());
             }
         }
 
@@ -605,25 +608,26 @@ namespace Avalonia.Controls
             return selectionInvalidated;
         }
 
-        private bool OnItemsRemoved(int index, int count)
+        private (bool selectionInvalidated, IReadOnlyList<object>) OnItemsRemoved(int index, IList oldItems)
         {
-            bool selectionInvalidated = false;
+            var removedItems = new List<object>();
+            var selectionInvalidated = false;
             
             // Remove the items from the selection for leaf
             if (ItemsSourceView.Count > 0)
             {
-                bool isSelected = false;
+                var count = oldItems.Count;
 
-                for (int i = index; i <= index + count - 1; i++)
+                for (int i = 0; i <= count - 1; i++)
                 {
-                    if (IsSelected(i))
+                    if (IsSelected(index + i))
                     {
-                        isSelected = true;
+                        removedItems.Add(oldItems[i]);
                         break;
                     }
                 }
 
-                if (isSelected)
+                if (removedItems.Count > 0)
                 {
                     RemoveRange(new IndexRange(index, index + count - 1), raiseOnSelectionChanged: false);
                     selectionInvalidated = true;
@@ -692,7 +696,7 @@ namespace Avalonia.Controls
                 }
             }
 
-            return selectionInvalidated;
+            return (selectionInvalidated, removedItems);
         }
 
         private void OnSelectionChanged()

@@ -6,7 +6,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Linq;
 using System.Text;
 using Avalonia.Controls.Utils;
 
@@ -19,7 +21,6 @@ namespace Avalonia.Controls
         private IReadOnlyList<IndexPath> _selectedIndicesCached;
         private IReadOnlyList<object> _selectedItemsCached;
         private SelectionModelChildrenRequestedEventArgs _childrenRequestedEventArgs;
-        private SelectionModelSelectionChangedEventArgs _selectionChangedEventArgs;
 
         public event EventHandler<SelectionModelChildrenRequestedEventArgs> ChildrenRequested;
         public event PropertyChangedEventHandler PropertyChanged;
@@ -36,9 +37,10 @@ namespace Avalonia.Controls
             get => _rootNode.Source;
             set
             {
+                var oldSelection = PrepareForSelectionChanged();
                 ClearSelection(resetAnchor: true, raiseSelectionChanged: false);
                 _rootNode.Source = value;
-                OnSelectionChanged();
+                OnSelectionChanged(oldSelection);
                 RaisePropertyChanged("Source");
             }
         }
@@ -131,9 +133,10 @@ namespace Avalonia.Controls
 
                 if (!isSelected.HasValue || !isSelected.Value)
                 {
+                    var oldSelection = PrepareForSelectionChanged();
                     ClearSelection(resetAnchor: true, raiseSelectionChanged: false);
                     SelectWithPathImpl(value, select: true, raiseSelectionChanged: false);
-                    OnSelectionChanged();
+                    OnSelectionChanged(oldSelection);
                 }
             }
         }
@@ -425,6 +428,8 @@ namespace Avalonia.Controls
 
         public void SelectAll()
         {
+            var oldSelection = PrepareForSelectionChanged();
+
             SelectionTreeHelper.Traverse(
                 _rootNode,
                 realizeChildren: true,
@@ -436,7 +441,7 @@ namespace Avalonia.Controls
                     }
                 });
 
-            OnSelectionChanged();
+            OnSelectionChanged(oldSelection);
         }
 
         public void ClearSelection()
@@ -454,9 +459,11 @@ namespace Avalonia.Controls
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        public void OnSelectionInvalidatedDueToCollectionChange()
+        public void OnSelectionInvalidatedDueToCollectionChange(
+            bool indicesChanged, 
+            IReadOnlyList<object> deselected)
         {
-            OnSelectionChanged();
+            OnSelectionChanged(indicesChanged, deselected, Array.Empty<object>());
         }
 
         public object ResolvePath(object data, SelectionNode sourceNode)
@@ -500,6 +507,8 @@ namespace Avalonia.Controls
 
         private void ClearSelection(bool resetAnchor, bool raiseSelectionChanged)
         {
+            var oldSelection = raiseSelectionChanged ? PrepareForSelectionChanged() : null;
+
             SelectionTreeHelper.Traverse(
                 _rootNode,
                 realizeChildren: false,
@@ -512,11 +521,29 @@ namespace Avalonia.Controls
 
             if (raiseSelectionChanged)
             {
-                OnSelectionChanged();
+                OnSelectionChanged(oldSelection);
             }
         }
 
-        private void OnSelectionChanged()
+        private void OnSelectionChanged(IReadOnlyList<object> oldSelection)
+        {
+            if (oldSelection != null)
+            {
+                _selectedItemsCached = null;
+                var added = SelectedItems.Except(oldSelection).ToList();
+                var removed = oldSelection.Except(SelectedItems).ToList();
+                OnSelectionChanged(false, removed, added);
+            }
+            else
+            {
+                OnSelectionChanged(false, null, null);
+            }
+        }
+
+        private void OnSelectionChanged(
+            bool indicesChanged,
+            IReadOnlyList<object> removed,
+            IReadOnlyList<object> added)
         {
             _selectedIndicesCached = null;
             _selectedItemsCached = null;
@@ -524,17 +551,30 @@ namespace Avalonia.Controls
             // Raise SelectionChanged event
             if (SelectionChanged != null)
             {
-                if (_selectionChangedEventArgs == null)
+                if (removed == null)
                 {
-                    _selectionChangedEventArgs = new SelectionModelSelectionChangedEventArgs();
+                    throw new ArgumentNullException(
+                        nameof(removed),
+                        "'removed' must be set when SelectedChanged is subscribed");
                 }
 
-                SelectionChanged(this, _selectionChangedEventArgs);
+                if (added == null)
+                {
+                    throw new ArgumentNullException(
+                        nameof(added),
+                        "'added' must be set when SelectedChanged is subscribed");
+                }
+
+                if (indicesChanged || added.Count > 0 || removed.Count > 0)
+                {
+                    var e = new SelectionModelSelectionChangedEventArgs(removed, added);
+                    SelectionChanged(this, e);
+                }
             }
 
             RaisePropertyChanged(nameof(SelectedIndex));
             RaisePropertyChanged(nameof(SelectedIndices));
-            
+
             if (_rootNode.Source != null)
             {
                 RaisePropertyChanged(nameof(SelectedItem));
@@ -544,6 +584,8 @@ namespace Avalonia.Controls
 
         private void SelectImpl(int index, bool select)
         {
+            var oldSelection = PrepareForSelectionChanged();
+
             if (_singleSelect)
             {
                 ClearSelection(resetAnchor: true, raiseSelectionChanged: false);
@@ -556,11 +598,13 @@ namespace Avalonia.Controls
                 AnchorIndex = new IndexPath(index);
             }
 
-            OnSelectionChanged();
+            OnSelectionChanged(oldSelection);
         }
 
         private void SelectWithGroupImpl(int groupIndex, int itemIndex, bool select)
         {
+            var oldSelection = PrepareForSelectionChanged();
+
             if (_singleSelect)
             {
                 ClearSelection(resetAnchor: true, raiseSelectionChanged: false);
@@ -574,13 +618,14 @@ namespace Avalonia.Controls
                 AnchorIndex = new IndexPath(groupIndex, itemIndex);
             }
 
-            OnSelectionChanged();
+            OnSelectionChanged(oldSelection);
         }
 
         private void SelectWithPathImpl(IndexPath index, bool select, bool raiseSelectionChanged)
         {
             bool selected = false;
-            
+            var oldSelection = raiseSelectionChanged ? PrepareForSelectionChanged() : null;
+
             if (_singleSelect)
             {
                 ClearSelection(resetAnchor: true, raiseSelectionChanged: false);
@@ -606,12 +651,14 @@ namespace Avalonia.Controls
 
             if (raiseSelectionChanged)
             {
-                OnSelectionChanged();
+                OnSelectionChanged(oldSelection);
             }
         }
 
         private void SelectRangeFromAnchorImpl(int index, bool select)
         {
+            var oldSelection = PrepareForSelectionChanged();
+
             int anchorIndex = 0;
             var anchor = AnchorIndex;
             
@@ -624,12 +671,13 @@ namespace Avalonia.Controls
 
             if (selected)
             {
-                OnSelectionChanged();
+                OnSelectionChanged(oldSelection);
             }
         }
 
         private void SelectRangeFromAnchorWithGroupImpl(int endGroupIndex, int endItemIndex, bool select)
         {
+            var oldSelection = PrepareForSelectionChanged();
             var startGroupIndex = 0;
             var startItemIndex = 0;
             var anchorIndex = AnchorIndex;
@@ -663,12 +711,13 @@ namespace Avalonia.Controls
 
             if (selected)
             {
-                OnSelectionChanged();
+                OnSelectionChanged(oldSelection);
             }
         }
 
         private void SelectRangeImpl(IndexPath start, IndexPath end, bool select)
         {
+            var oldSelection = PrepareForSelectionChanged();
             var winrtStart = start;
             var winrtEnd = end;
 
@@ -694,7 +743,17 @@ namespace Avalonia.Controls
                     }
                 });
 
-            OnSelectionChanged();
+            OnSelectionChanged(oldSelection);
+        }
+
+        private IReadOnlyList<object> PrepareForSelectionChanged()
+        {
+            if (SelectionChanged == null)
+            {
+                return null;
+            }
+
+            return SelectedItems.ToList();
         }
 
         internal class SelectedItemInfo
